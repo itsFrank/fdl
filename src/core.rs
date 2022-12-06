@@ -9,11 +9,13 @@ pub enum PropValue {
     Err,
 }
 
+#[derive(Debug)]
 pub struct Prop {
     pub name: String,
     pub value: PropValue,
 }
 
+#[derive(Debug)]
 pub struct Thing {
     pub name: String,
     pub props: HashMap<String, Prop>,
