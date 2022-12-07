@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::string_utils::strip_quotes;
+
 #[derive(PartialEq, Debug)]
 pub enum PropValue {
     Int(i32),
@@ -63,7 +65,7 @@ impl Prop {
     pub fn string_from_literal(name: impl Into<String>, literal: impl Into<String>) -> Self {
         return Self {
             name: name.into(),
-            value: PropValue::String(literal.into()),
+            value: PropValue::String(strip_quotes(literal.into().as_str()).to_string()),
         };
     }
 }
@@ -110,7 +112,7 @@ mod tests {
 
     #[test]
     fn prop_can_parse_string() {
-        let prop = Prop::string_from_literal("name", "hello world");
+        let prop = Prop::string_from_literal("name", "\"hello world\"");
         assert_eq!(prop.value, PropValue::String("hello world".to_string()));
     }
 

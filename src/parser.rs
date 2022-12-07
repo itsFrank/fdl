@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    core::Thing,
+    core::{Prop, PropValue, Thing},
     lexer::{Token, TokenInfo, TokenKind},
     string_utils::strip_quotes,
 };
@@ -73,7 +73,12 @@ impl Parser {
         match token.kind {
             TokenKind::Word => match token.literal.as_str() {
                 "thing" => return self.parse_thing((token, token_info), iter),
-                _ => {}
+                "int" | "float" | "bool" | "string" => {
+                    return self.parse_prop((token, token_info), iter)
+                }
+                _ => {
+                    return Err(ParseError::new(token_info, "Unexpected token"));
+                }
             },
             TokenKind::Symbol => match token.literal.as_str() {
                 "}" => {
@@ -86,9 +91,13 @@ impl Parser {
                         None => self.things.insert(thing.name.clone(), thing),
                     };
                 }
-                _ => {}
+                _ => {
+                    return Err(ParseError::new(token_info, "Unexpected token"));
+                }
             },
-            _ => {}
+            _ => {
+                return Err(ParseError::new(token_info, "Unexpected token"));
+            }
         }
         return Ok(());
     }
@@ -126,12 +135,88 @@ impl Parser {
         self.add_thing(&token_p1.literal);
         return Ok(());
     }
+
+    fn parse_prop<I>(
+        &mut self,
+        (token, token_info): (Token, TokenInfo),
+        iter: &mut I,
+    ) -> Result<(), ParseError>
+    where
+        I: Iterator<Item = (Token, TokenInfo)>,
+    {
+        if self.thing_stack.is_empty() {
+            return Err(ParseError::new(
+                token_info,
+                "Unexpected prop definition outside of thing",
+            ));
+        }
+
+        let Some((token_name, token_name_info)) = iter.next() else {
+            return Err(ParseError::new(
+                token_info,
+                "Expected name after prop type",
+            ));
+        };
+
+        if token_name.kind != TokenKind::Word {
+            return Err(ParseError::new(
+                token_name_info,
+                "Expected name after prop type",
+            ));
+        }
+
+        let prop_name = token_name.literal;
+
+        let Some((token_eq, token_eq_info)) = iter.next() else {
+            return Err(ParseError::new(
+                token_name_info,
+                "Expected `=` symbol prop name",
+            ));
+        };
+
+        if token_eq.kind != TokenKind::Symbol || token_eq.literal != "=" {
+            return Err(ParseError::new(
+                token_eq_info,
+                "Expected `=` symbol prop name",
+            ));
+        }
+
+        let Some((token_val, token_val_info)) = iter.next() else {
+            return Err(ParseError::new(
+                token_eq_info,
+                "Expected value after prop declaration",
+            ));
+        };
+
+        let prop = match token.literal.as_str() {
+            "int" => Prop::int_from_literal(prop_name, token_val.literal),
+            "float" => Prop::float_from_literal(prop_name, token_val.literal),
+            "bool" => Prop::bool_from_literal(prop_name, token_val.literal),
+            "string" => Prop::string_from_literal(prop_name, token_val.literal),
+            _ => {
+                return Err(ParseError::new(
+                    token_info,
+                    "Unexpected prop type `".to_owned() + &token.literal + "`",
+                ));
+            }
+        };
+
+        if prop.value == PropValue::Err {
+            return Err(ParseError::new(
+                token_val_info,
+                "Unable to parse prop value matching declared prop type",
+            ));
+        }
+
+        self.thing_stack.last_mut().unwrap().add_prop(prop);
+        return Ok(());
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lexer::Lexer;
+    use crate::{core::PropValue, lexer::Lexer};
 
     fn populate_parser(source: &str) -> Result<Parser, ParseError> {
         let lexer = Lexer::new(source);
@@ -192,5 +277,86 @@ mod tests {
     fn thing_without_closing_brace_leads_to_error() {
         let err = populate_parser(r#"thing "Name" {"#).unwrap_err();
         assert_eq!(err.token_info, TokenInfo::new(0, 0));
+    }
+
+    #[test]
+    fn parses_int_prop() {
+        let parser = populate_parser(r#" thing "Name" { int prop = 12 } "#).unwrap();
+        let thing = parser.things.get("Name").unwrap();
+        let prop = thing.props.get("prop").unwrap();
+        assert_eq!(prop.value, PropValue::Int(12))
+    }
+
+    #[test]
+    fn parses_float_prop() {
+        let parser = populate_parser(r#" thing "Name" { float prop = 12.1 } "#).unwrap();
+        let thing = parser.things.get("Name").unwrap();
+        let prop = thing.props.get("prop").unwrap();
+        assert_eq!(prop.value, PropValue::Float(12.1))
+    }
+
+    #[test]
+    fn parses_bool_prop() {
+        let parser = populate_parser(r#" thing "Name" { bool prop = true } "#).unwrap();
+        let thing = parser.things.get("Name").unwrap();
+        let prop = thing.props.get("prop").unwrap();
+        assert_eq!(prop.value, PropValue::Bool(true))
+    }
+
+    #[test]
+    fn parses_string_prop() {
+        let parser = populate_parser(r#" thing "Name" { string prop = "Hello" } "#).unwrap();
+        let thing = parser.things.get("Name").unwrap();
+        let prop = thing.props.get("prop").unwrap();
+        assert_eq!(prop.value, PropValue::String("Hello".to_string()));
+    }
+
+    #[test]
+    fn top_level_prop_definition_results_in_error() {
+        let err = populate_parser(r#"string prop = "Hello""#).unwrap_err();
+        assert_eq!(err.message, "Unexpected prop definition outside of thing");
+    }
+
+    #[test]
+    fn unsuported_prop_type_results_in_error() {
+        let err = populate_parser(r#" thing "Name" { bloop prop = 12 } "#).unwrap_err();
+        assert_eq!(err.message, "Unexpected token");
+        assert_eq!(err.token_info, TokenInfo::new(0, 16));
+    }
+
+    #[test]
+    fn missing_prop_name_results_in_error() {
+        let err = populate_parser(r#"thing "Name" { int = 12 }"#).unwrap_err();
+        assert_eq!(err.message, "Expected name after prop type");
+        let err = populate_parser(r#"thing "Name" { int"#).unwrap_err();
+        assert_eq!(err.message, "Expected name after prop type");
+    }
+
+    #[test]
+    fn missing_prop_eq_results_in_error() {
+        let err = populate_parser(r#"thing "Name" { int prop 12 }"#).unwrap_err();
+        assert_eq!(err.message, "Expected `=` symbol prop name");
+        let err = populate_parser(r#"thing "Name" { int prop"#).unwrap_err();
+        assert_eq!(err.message, "Expected `=` symbol prop name");
+    }
+
+    #[test]
+    fn missing_prop_value_results_in_error() {
+        let err = populate_parser(r#"thing "Name" { int prop = }"#).unwrap_err();
+        assert_eq!(
+            err.message,
+            "Unable to parse prop value matching declared prop type"
+        );
+        let err = populate_parser(r#"thing "Name" { int prop ="#).unwrap_err();
+        assert_eq!(err.message, "Expected value after prop declaration");
+    }
+
+    #[test]
+    fn prop_value_not_matching_type_results_in_error() {
+        let err = populate_parser(r#"thing "Name" { int prop = true }"#).unwrap_err();
+        assert_eq!(
+            err.message,
+            "Unable to parse prop value matching declared prop type"
+        );
     }
 }
