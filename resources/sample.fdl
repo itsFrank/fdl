@@ -1,0 +1,7 @@
+thing "Hello" {
+    thing "World" {
+        thing "Inner" {}
+        thing "Sibling" {}
+    }
+    thing "Bye" {}
+}

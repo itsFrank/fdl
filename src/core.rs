@@ -86,10 +86,24 @@ impl Thing {
     pub fn add_thing(&mut self, thing: Thing) {
         self.things.insert(thing.name.clone(), thing);
     }
+
+    fn foreach_helper(thing: &Thing, depth: usize, f: &impl Fn(&Thing, usize) -> ()) {
+        f(thing, depth);
+        for (_, thing) in &thing.things {
+            Self::foreach_helper(thing, depth + 1, f);
+        }
+    }
+
+    pub fn foreach(&self, f: impl Fn(&Thing, usize) -> ()) {
+        let f = &f;
+        Self::foreach_helper(self, 0, f);
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use crate::core::*;
 
     #[test]
@@ -149,5 +163,26 @@ mod tests {
         thing.add_thing(Thing::new("thing2"));
         assert_eq!(thing.things.len(), 1);
         assert_eq!(thing.things.get("thing2").unwrap().name, "thing2");
+    }
+
+    #[test]
+    fn foreach_thing_traverses_thing_trees() {
+        let mut thing = Thing::new("Hello");
+        thing.add_thing(Thing::new("World"));
+        thing.add_thing(Thing::new("Bye"));
+        let ref mut world_thing = thing.things.get_mut("World").unwrap();
+        world_thing.add_thing(Thing::new("Inner"));
+
+        let vec = RefCell::new(Vec::<String>::new());
+        thing.foreach(|thing, depth| {
+            vec.borrow_mut()
+                .push(thing.name.clone() + "-" + depth.to_string().as_str());
+        });
+
+        assert!(vec.borrow().contains(&"Hello-0".to_string()));
+        assert!(vec.borrow().contains(&"World-1".to_string()));
+        assert!(vec.borrow().contains(&"Inner-2".to_string()));
+        assert!(vec.borrow().contains(&"Bye-1".to_string()));
+        assert_eq!(vec.borrow().len(), 4);
     }
 }
