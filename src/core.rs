@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, vec};
 
 use crate::string_utils::strip_quotes;
 
@@ -94,9 +94,34 @@ impl Thing {
         }
     }
 
+    fn foreach_parent_helper(
+        thing: &Thing,
+        parent: Option<&Thing>,
+        depth: usize,
+        f: &impl Fn(&Thing, Option<&Thing>, usize) -> (),
+    ) {
+        f(thing, parent, depth);
+        for (_, child) in &thing.things {
+            Self::foreach_parent_helper(child, Some(thing), depth + 1, f);
+        }
+    }
+
     pub fn foreach(&self, f: impl Fn(&Thing, usize) -> ()) {
-        let f = &f;
-        Self::foreach_helper(self, 0, f);
+        Self::foreach_helper(self, 0, &f);
+    }
+
+    pub fn foreach_parent(&self, f: impl Fn(&Thing, Option<&Thing>, usize) -> ()) {
+        Self::foreach_parent_helper(self, None, 0, &f);
+    }
+}
+
+impl<'a> IntoIterator for &'a Thing {
+    type Item = &'a Thing;
+    type IntoIter = vec::IntoIter<&'a Thing>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let things = Vec::<&'a Thing>::new();
+        return things.into_iter();
     }
 }
 
@@ -175,8 +200,7 @@ mod tests {
 
         let vec = RefCell::new(Vec::<String>::new());
         thing.foreach(|thing, depth| {
-            vec.borrow_mut()
-                .push(thing.name.clone() + "-" + depth.to_string().as_str());
+            vec.borrow_mut().push(format!("{}-{}", thing.name, depth));
         });
 
         assert!(vec.borrow().contains(&"Hello-0".to_string()));
@@ -184,5 +208,24 @@ mod tests {
         assert!(vec.borrow().contains(&"Inner-2".to_string()));
         assert!(vec.borrow().contains(&"Bye-1".to_string()));
         assert_eq!(vec.borrow().len(), 4);
+    }
+
+    #[test]
+    fn foreach_parent_thing_traverses_thing_trees() {
+        let mut thing = Thing::new("Hello");
+        thing.add_thing(Thing::new("World"));
+
+        let vec = RefCell::new(Vec::<String>::new());
+        thing.foreach_parent(|thing, parent, _| {
+            let parent_name = match parent {
+                Some(parent) => parent.name.clone(),
+                None => "".to_string(),
+            };
+            vec.borrow_mut()
+                .push(format!("{}-{}", parent_name, thing.name));
+        });
+        assert!(vec.borrow().contains(&"-Hello".to_string()));
+        assert!(vec.borrow().contains(&"Hello-World".to_string()));
+        assert_eq!(vec.borrow().len(), 2);
     }
 }
