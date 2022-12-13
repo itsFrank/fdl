@@ -6,9 +6,9 @@ use ruscii::app::{App, State};
 use ruscii::drawing::Pencil;
 use ruscii::keyboard::{Key, KeyEvent};
 use ruscii::spatial::Vec2;
-use ruscii::terminal::Window;
+use ruscii::terminal::{Color, Window};
 
-use fdl::core::{Prop, PropValue, Thing};
+use fdl::core::{ForeachCtrl, Prop, PropValue, Thing};
 use fdl::lexer::Lexer;
 use fdl::parser::{ParseError, Parser};
 
@@ -19,58 +19,52 @@ fn make_err_string(err: &ParseError) -> String {
     );
 }
 
+type ThingKey = *const Thing;
+
 struct FdlViewState {
     pub select_index: usize,
-    pub num_visible: usize,
-    pub thing_state: HashMap<*const Thing, bool>,
+    pub thing_state: HashMap<ThingKey, bool>,
 }
 
 impl FdlViewState {
     pub fn new(things: &Vec<Thing>) -> Self {
-        let thing_state = RefCell::new(HashMap::<*const Thing, bool>::new());
-        let mut num_visible = things.len();
+        let thing_state = RefCell::new(HashMap::<ThingKey, bool>::new());
         for thing in things {
-            num_visible += thing.things.len();
             thing.foreach(|thing, _, depth| {
                 thing_state
                     .borrow_mut()
-                    .insert(thing as *const Thing, depth == 0);
+                    .insert(thing as ThingKey, depth == 0);
             });
         }
 
         return Self {
             select_index: 1,
             thing_state: thing_state.into_inner(),
-            num_visible: num_visible,
         };
     }
 
-    pub fn open_thing(&mut self, thing: &Thing) {
-        let key = thing as *const Thing;
-        if !self.thing_state.contains_key(&key) {
-            return;
-        }
+    pub fn is_open(&self, key: ThingKey) -> bool {
+        return *self.thing_state.get(&key).unwrap_or(&false);
+    }
+
+    pub fn open_thing(&mut self, key: ThingKey) {
+        // if !self.thing_state.contains_key(&key) {
+        //     return;
+        // }
         self.thing_state.insert(key, true);
-        self.num_visible += thing.things.len();
     }
 
-    pub fn close_thing(&mut self, thing: &Thing) {
-        let key = thing as *const Thing;
-        let open = self.thing_state.get(&key).unwrap_or(&false);
-        if !open {
-            return;
-        }
+    pub fn close_thing(&mut self, key: ThingKey) {
+        // if !self.thing_state.contains_key(&key) {
+        //     return;
+        // }
         self.thing_state.insert(key, false);
-        for (_, child) in &thing.things {
-            self.close_thing(child);
-        }
-        self.num_visible -= thing.things.len();
     }
 
-    fn update_index(&mut self, value: i32) {
+    fn update_index(&mut self, value: i32, num_visible: usize) {
         let new_index = self.select_index as i32 + value;
         let new_index = cmp::max(new_index, 1) as usize;
-        let new_index = cmp::min(new_index, self.num_visible.clone());
+        let new_index = cmp::min(new_index, num_visible);
         self.select_index = new_index;
     }
 }
@@ -97,9 +91,12 @@ fn parse_file(file_path: String) -> Result<Vec<Thing>, String> {
     return Ok(parser.things.into_values().collect());
 }
 
-fn foreach_thing(things: &Vec<Thing>, mut f: impl FnMut(&Thing, Option<&Thing>, usize) -> ()) {
+fn foreach_thing(
+    things: &Vec<Thing>,
+    mut f: impl FnMut(&Thing, Option<&Thing>, usize) -> ForeachCtrl,
+) {
     for thing in things {
-        thing.foreach(&mut f);
+        thing.foreach_ctrl(&mut f);
     }
 }
 
@@ -146,21 +143,48 @@ fn main() -> Result<(), FdlError> {
 
     let mut app = App::new();
     app.run(|app_state: &mut State, window: &mut Window| {
+        let mut pencil = Pencil::new(window.canvas_mut());
+        let mut line = 1;
+        let mut selected_thing: ThingKey = std::ptr::null();
+        foreach_thing(&things, |thing, parent, depth| {
+            if let Some(parent) = parent {
+                if !fdl_view_state.is_open(parent) {
+                    return ForeachCtrl::BreakSubtree;
+                }
+            }
+
+            if fdl_view_state.select_index == line {
+                selected_thing = thing;
+                pencil.set_background(Color::White);
+                pencil.set_foreground(Color::Black);
+            }
+
+            let caret = if fdl_view_state.is_open(thing) {
+                "⌄"
+            } else {
+                "›"
+            };
+            let caret = if thing.things.len() == 0 { "-" } else { caret };
+            let text = format!("{} {}", caret, thing.name);
+            pencil.draw_text(&text, Vec2::xy((depth * 4) + 1, line.clone()));
+            line += 1;
+
+            pencil.set_background(Color::Black);
+            pencil.set_foreground(Color::White);
+
+            return ForeachCtrl::Continue;
+        });
+
         for key_event in app_state.keyboard().last_key_events() {
             match key_event {
                 KeyEvent::Pressed(Key::Esc) => app_state.stop(),
-                KeyEvent::Pressed(Key::Q) => app_state.stop(),
+                KeyEvent::Pressed(Key::Up) => fdl_view_state.update_index(-1, line - 1),
+                KeyEvent::Pressed(Key::Down) => fdl_view_state.update_index(1, line - 1),
+                KeyEvent::Pressed(Key::Left) => fdl_view_state.close_thing(selected_thing),
+                KeyEvent::Pressed(Key::Right) => fdl_view_state.open_thing(selected_thing),
                 _ => (),
             }
         }
-
-        let mut pencil = Pencil::new(window.canvas_mut());
-        let mut line = 1;
-        foreach_thing(&things, |thing, _, depth| {
-            let text = format!("> {}", thing.name);
-            pencil.draw_text(&text, Vec2::xy((depth * 4) + 1, line.clone()));
-            line += 1;
-        });
     });
 
     return Ok(());
@@ -173,8 +197,7 @@ mod tests {
     #[test]
     fn update_index_can_increment() {
         let mut state = FdlViewState::new(&Vec::new());
-        state.num_visible = 3;
-        state.update_index(1);
+        state.update_index(1, 3);
         assert_eq!(state.select_index, 2);
     }
 }
