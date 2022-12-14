@@ -1,7 +1,22 @@
 thing "Hello" {
+    string str = "I'm string"
+
     thing "World" {
-        thing "Inner" {}
-        thing "Sibling" {}
+        int i1 = 1
+        int i2 = 201
+
+        thing "Inner" {
+            bool is_inner = true
+            bool is_sibling = false
+        }
+        thing "Sibling" {
+            bool is_inner = false
+            bool is_sibling = true
+        }
     }
-    thing "Bye" {}
+    thing "Bye" {
+        float x = 10.2
+        float y = 2
+        float z = 9000.01
+    }
 }

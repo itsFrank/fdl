@@ -87,7 +87,7 @@ impl Parser {
                     };
 
                     match self.thing_stack.last_mut() {
-                        Some(parent) => parent.things.insert(thing.name.clone(), thing),
+                        Some(parent) => parent.add_thing(thing),
                         None => self.things.insert(thing.name.clone(), thing),
                     };
                 }
@@ -253,7 +253,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parser.things.len(), 1);
-        assert_eq!(parser.things.get("MyThing").unwrap().things.len(), 1);
+        assert_eq!(parser.things.get("MyThing").unwrap().num_things(), 1);
     }
 
     #[test]

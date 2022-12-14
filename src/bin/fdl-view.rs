@@ -1,4 +1,3 @@
-use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::{cmp, fmt, fs, io};
 
@@ -8,7 +7,7 @@ use ruscii::keyboard::{Key, KeyEvent};
 use ruscii::spatial::Vec2;
 use ruscii::terminal::{Color, Window};
 
-use fdl::core::{ForeachCtrl, Prop, PropValue, Thing};
+use fdl::core::{ForeachCtrl, Thing};
 use fdl::lexer::Lexer;
 use fdl::parser::{ParseError, Parser};
 
@@ -28,18 +27,16 @@ struct FdlViewState {
 
 impl FdlViewState {
     pub fn new(things: &Vec<Thing>) -> Self {
-        let thing_state = RefCell::new(HashMap::<ThingKey, bool>::new());
+        let mut thing_state = HashMap::<ThingKey, bool>::new();
         for thing in things {
             thing.foreach(|thing, _, depth| {
-                thing_state
-                    .borrow_mut()
-                    .insert(thing as ThingKey, depth == 0);
+                thing_state.insert(thing as ThingKey, depth == 0);
             });
         }
 
         return Self {
             select_index: 1,
-            thing_state: thing_state.into_inner(),
+            thing_state: thing_state,
         };
     }
 
@@ -69,14 +66,6 @@ impl FdlViewState {
     }
 }
 
-enum Command {
-    OpenThing,
-    CloseThing,
-    CursorUp,
-    CursorDown,
-    Exit,
-}
-
 fn parse_file(file_path: String) -> Result<Vec<Thing>, String> {
     let file_source = match fs::read_to_string(file_path) {
         Ok(file_source) => file_source,
@@ -91,12 +80,27 @@ fn parse_file(file_path: String) -> Result<Vec<Thing>, String> {
     return Ok(parser.things.into_values().collect());
 }
 
-fn foreach_thing(
+fn foreach_thing(things: &Vec<Thing>, mut f: impl FnMut(&Thing, Option<&Thing>, usize) -> ()) {
+    for thing in things {
+        thing.foreach(&mut f);
+    }
+}
+
+fn foreach_thing_ctrl(
     things: &Vec<Thing>,
     mut f: impl FnMut(&Thing, Option<&Thing>, usize) -> ForeachCtrl,
 ) {
     for thing in things {
         thing.foreach_ctrl(&mut f);
+    }
+}
+
+fn print_props(thing: &Thing, pencil: &mut Pencil, x_offset: usize) {
+    let mut line = 1;
+    for (name, prop) in &thing.props {
+        let text = format!("{}: {}", name, prop.value.to_string());
+        pencil.draw_text(&text, Vec2::xy(x_offset, line + 2));
+        line += 1;
     }
 }
 
@@ -141,12 +145,37 @@ fn main() -> Result<(), FdlError> {
     let things = parse_file(file_path)?;
     let mut fdl_view_state = FdlViewState::new(&things);
 
+    let mut max_height: usize = 0;
+    let mut longest_thing_row: usize = 8;
+    let mut longest_prop_row: usize = 7;
+    foreach_thing(&things, |thing, _, depth| {
+        max_height += 1;
+
+        let len: usize = (depth * 4) + 2 + thing.name.len();
+        longest_thing_row = cmp::max(longest_thing_row, len);
+
+        for (name, prop) in &thing.props {
+            let len = name.len() + 2 + prop.value.to_string().len();
+            longest_prop_row = cmp::max(longest_prop_row, len);
+        }
+    });
+
+    let max_height = max_height;
+    let things_width = longest_thing_row + 2;
+    let props_width = longest_prop_row + 2;
+    let props_x_offset = things_width + 2;
+
     let mut app = App::new();
     app.run(|app_state: &mut State, window: &mut Window| {
         let mut pencil = Pencil::new(window.canvas_mut());
+
+        pencil.draw_text("Things", Vec2::xy(1, 1));
+        pencil.draw_text("Props", Vec2::xy(props_x_offset, 1));
+        pencil.draw_hline('-', Vec2::xy(1, 2), props_width + things_width + 1);
+
         let mut line = 1;
         let mut selected_thing: ThingKey = std::ptr::null();
-        foreach_thing(&things, |thing, parent, depth| {
+        foreach_thing_ctrl(&things, |thing, parent, depth| {
             if let Some(parent) = parent {
                 if !fdl_view_state.is_open(parent) {
                     return ForeachCtrl::BreakSubtree;
@@ -155,6 +184,7 @@ fn main() -> Result<(), FdlError> {
 
             if fdl_view_state.select_index == line {
                 selected_thing = thing;
+                print_props(thing, &mut pencil, props_x_offset);
                 pencil.set_background(Color::White);
                 pencil.set_foreground(Color::Black);
             }
@@ -164,9 +194,9 @@ fn main() -> Result<(), FdlError> {
             } else {
                 "›"
             };
-            let caret = if thing.things.len() == 0 { "-" } else { caret };
+            let caret = if thing.num_things() == 0 { "-" } else { caret };
             let text = format!("{} {}", caret, thing.name);
-            pencil.draw_text(&text, Vec2::xy((depth * 4) + 1, line.clone()));
+            pencil.draw_text(&text, Vec2::xy((depth * 4) + 1, line.clone() + 2));
             line += 1;
 
             pencil.set_background(Color::Black);
@@ -175,11 +205,14 @@ fn main() -> Result<(), FdlError> {
             return ForeachCtrl::Continue;
         });
 
+        pencil.draw_vline('|', Vec2::xy(things_width, 1), max_height + 2);
+
+        let num_visible_things = line - 1;
         for key_event in app_state.keyboard().last_key_events() {
             match key_event {
                 KeyEvent::Pressed(Key::Esc) => app_state.stop(),
-                KeyEvent::Pressed(Key::Up) => fdl_view_state.update_index(-1, line - 1),
-                KeyEvent::Pressed(Key::Down) => fdl_view_state.update_index(1, line - 1),
+                KeyEvent::Pressed(Key::Up) => fdl_view_state.update_index(-1, num_visible_things),
+                KeyEvent::Pressed(Key::Down) => fdl_view_state.update_index(1, num_visible_things),
                 KeyEvent::Pressed(Key::Left) => fdl_view_state.close_thing(selected_thing),
                 KeyEvent::Pressed(Key::Right) => fdl_view_state.open_thing(selected_thing),
                 _ => (),

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, vec};
+use std::collections::HashMap;
 
 use crate::string_utils::strip_quotes;
 
@@ -21,13 +21,29 @@ pub struct Prop {
 pub struct Thing {
     pub name: String,
     pub props: HashMap<String, Prop>,
-    pub things: HashMap<String, Thing>,
+    things: HashMap<String, Thing>,
+}
+
+pub struct ThingBuilder {
+    thing: Thing,
 }
 
 pub enum ForeachCtrl {
     Break,
     BreakSubtree,
     Continue,
+}
+
+impl PropValue {
+    pub fn to_string(&self) -> String {
+        return match self {
+            PropValue::Int(val) => val.to_string(),
+            PropValue::Float(val) => val.to_string(),
+            PropValue::Bool(val) => val.to_string(),
+            PropValue::String(val) => val.clone(),
+            PropValue::Err => "Err".to_string(),
+        };
+    }
 }
 
 impl Prop {
@@ -85,12 +101,30 @@ impl Thing {
         };
     }
 
+    pub fn build(name: impl Into<String>) -> ThingBuilder {
+        return ThingBuilder {
+            thing: Thing::new(name),
+        };
+    }
+
     pub fn add_prop(&mut self, prop: Prop) {
         self.props.insert(prop.name.clone(), prop);
     }
 
-    pub fn add_thing(&mut self, thing: Thing) {
-        self.things.insert(thing.name.clone(), thing);
+    pub fn num_things(&self) -> usize {
+        return self.things.len();
+    }
+
+    pub fn add_thing(&mut self, thing: Thing) -> Option<Thing> {
+        return self.things.insert(thing.name.clone(), thing);
+    }
+
+    pub fn get_thing(&self, key: impl Into<String>) -> Option<&Thing> {
+        return self.things.get(&key.into());
+    }
+
+    pub fn get_thing_mut(&mut self, key: impl Into<String>) -> Option<&mut Thing> {
+        return self.things.get_mut(&key.into());
     }
 
     fn foreach_helper(
@@ -135,20 +169,31 @@ impl Thing {
     }
 }
 
-impl<'a> IntoIterator for &'a Thing {
-    type Item = &'a Thing;
-    type IntoIter = vec::IntoIter<&'a Thing>;
+impl ThingBuilder {
+    pub fn thing(mut self, thing: Thing) -> ThingBuilder {
+        self.thing.add_thing(thing);
+        return self;
+    }
 
-    fn into_iter(self) -> Self::IntoIter {
-        let things = Vec::<&'a Thing>::new();
-        return things.into_iter();
+    pub fn things(mut self, things: Vec<Thing>) -> ThingBuilder {
+        for thing in things {
+            self.thing.add_thing(thing);
+        }
+        return self;
+    }
+
+    pub fn prop(mut self, prop: Prop) -> ThingBuilder {
+        self.thing.add_prop(prop);
+        return self;
+    }
+
+    pub fn finish(self) -> Thing {
+        return self.thing;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-
     use crate::core::*;
 
     #[test]
@@ -206,46 +251,47 @@ mod tests {
     fn things_can_be_added_as_children_to_things() {
         let mut thing = Thing::new("thing");
         thing.add_thing(Thing::new("thing2"));
-        assert_eq!(thing.things.len(), 1);
-        assert_eq!(thing.things.get("thing2").unwrap().name, "thing2");
+        assert_eq!(thing.num_things(), 1);
+        assert_eq!(thing.get_thing("thing2").unwrap().name, "thing2");
     }
 
     #[test]
     fn foreach_thing_traverses_thing_trees() {
-        let mut thing = Thing::new("Hello");
-        thing.add_thing(Thing::new("World"));
-        thing.add_thing(Thing::new("Bye"));
-        let ref mut world_thing = thing.things.get_mut("World").unwrap();
-        world_thing.add_thing(Thing::new("Inner"));
+        let thing = Thing::build("Hello")
+            .things(vec![
+                Thing::build("World").thing(Thing::new("Inner")).finish(),
+                Thing::new("Bye"),
+            ])
+            .finish();
 
-        let vec = RefCell::new(Vec::<String>::new());
+        let mut vec = Vec::<String>::new();
         thing.foreach(|thing, parent, depth| {
             let parent_name = match parent {
                 Some(thing) => thing.name.clone(),
                 None => "".to_string(),
             };
-            vec.borrow_mut()
-                .push(format!("{}-{}-{}", thing.name, parent_name, depth));
+            vec.push(format!("{}-{}-{}", thing.name, parent_name, depth));
         });
 
-        assert!(vec.borrow().contains(&"Hello--0".to_string()));
-        assert!(vec.borrow().contains(&"World-Hello-1".to_string()));
-        assert!(vec.borrow().contains(&"Inner-World-2".to_string()));
-        assert!(vec.borrow().contains(&"Bye-Hello-1".to_string()));
-        assert_eq!(vec.borrow().len(), 4);
+        assert!(vec.contains(&"Hello--0".to_string()));
+        assert!(vec.contains(&"World-Hello-1".to_string()));
+        assert!(vec.contains(&"Inner-World-2".to_string()));
+        assert!(vec.contains(&"Bye-Hello-1".to_string()));
+        assert_eq!(vec.len(), 4);
     }
 
     #[test]
     fn foreach_ctrl_breaksubtree_exits_traversal() {
-        let mut thing = Thing::new("Hello");
-        thing.add_thing(Thing::new("World"));
-        thing.add_thing(Thing::new("Bye"));
-        let ref mut world_thing = thing.things.get_mut("World").unwrap();
-        world_thing.add_thing(Thing::new("Inner"));
+        let thing = Thing::build("Hello")
+            .things(vec![
+                Thing::build("World").thing(Thing::new("Inner")).finish(),
+                Thing::new("Bye"),
+            ])
+            .finish();
 
-        let vec = RefCell::new(Vec::<String>::new());
+        let mut vec = Vec::<String>::new();
         thing.foreach_ctrl(|thing, _, _| {
-            vec.borrow_mut().push(thing.name.clone());
+            vec.push(thing.name.clone());
 
             if thing.name == "World" {
                 return ForeachCtrl::BreakSubtree;
@@ -253,23 +299,24 @@ mod tests {
             return ForeachCtrl::Continue;
         });
 
-        assert!(vec.borrow().contains(&"Hello".to_string()));
-        assert!(vec.borrow().contains(&"World".to_string()));
-        assert!(vec.borrow().contains(&"Bye".to_string()));
-        assert_eq!(vec.borrow().len(), 3);
+        assert!(vec.contains(&"Hello".to_string()));
+        assert!(vec.contains(&"World".to_string()));
+        assert!(vec.contains(&"Bye".to_string()));
+        assert_eq!(vec.len(), 3);
     }
 
     #[test]
     fn foreach_ctrl_break_exits_traversal() {
-        let mut thing = Thing::new("Hello");
-        thing.add_thing(Thing::new("World"));
-        thing.add_thing(Thing::new("Bye"));
-        let ref mut world_thing = thing.things.get_mut("World").unwrap();
-        world_thing.add_thing(Thing::new("Inner"));
+        let thing = Thing::build("Hello")
+            .things(vec![
+                Thing::build("World").thing(Thing::new("Inner")).finish(),
+                Thing::new("Bye"),
+            ])
+            .finish();
 
-        let vec = RefCell::new(Vec::<String>::new());
+        let mut vec = Vec::<String>::new();
         thing.foreach_ctrl(|thing, _, _| {
-            vec.borrow_mut().push(thing.name.clone());
+            vec.push(thing.name.clone());
 
             if thing.name == "World" {
                 return ForeachCtrl::Break;
@@ -277,8 +324,8 @@ mod tests {
             return ForeachCtrl::Continue;
         });
 
-        assert!(vec.borrow().contains(&"Hello".to_string()));
-        assert!(vec.borrow().contains(&"World".to_string()));
-        assert_eq!(vec.borrow().len(), 2);
+        assert!(vec.contains(&"Hello".to_string()));
+        assert!(vec.contains(&"World".to_string()));
+        assert!(vec.len() >= 2); // >= because traverse order is not guaranteed
     }
 }
